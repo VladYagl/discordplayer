@@ -1,0 +1,64 @@
+buildscript {
+    ext.kotlin_version = '1.0.4'
+    ext.kotlin_version = '1.1-M02'
+
+    repositories {
+        jcenter()
+        maven {
+            url 'https://dl.bintray.com/kotlin/kotlin-eap-1.1'
+        }
+    }
+    dependencies {
+        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
+    }
+}
+
+plugins {
+    id 'com.github.johnrengelman.shadow' version '1.2.3'
+}
+
+group 'coffee.cypher.discordplayer'
+version '1.0-SNAPSHOT'
+
+apply plugin: 'java'
+apply plugin: 'kotlin'
+
+repositories {
+    jcenter()
+
+    maven {
+        url 'https://dl.bintray.com/kotlin/kotlin-eap-1.1'
+    }
+
+    maven {
+        url 'https://jitpack.io'
+    }
+}
+
+configurations {
+    compile.extendsFrom shade
+}
+
+shadowJar {
+    manifest {
+        attributes 'Main-Class': 'coffee.cypher.discordplayer.MainKt'
+    }
+}
+
+assemble.dependsOn shadowJar
+
+dependencies {
+    shade "ch.qos.logback:logback-core:1.1.7"
+    shade "ch.qos.logback:logback-classic:1.1.7"
+    shade "org.jetbrains.kotlin:kotlin-stdlib:$kotlin_version"
+    shade "org.jetbrains.kotlin:kotlin-runtime:$kotlin_version"
+    shade "com.github.austinv11:Discord4j:2.6.1:shaded"
+    shade "org.cfg4j:cfg4j-core:4.4.0"
+    shade "org.slf4j:slf4j-api:1.7.21"
+    shade "com.googlecode.soundlibs:mp3spi:1.9.5-1"
+    shade "org.mapdb:mapdb:3.0.2"
+    shade "org.codehaus.groovy:groovy-all:2.4.7"
+}
+sourceSets {
+    main.java.srcDirs += 'src/main/kotlin'
+}
