@@ -5,6 +5,8 @@ import org.cfg4j.provider.ConfigurationProvider
 import org.cfg4j.provider.ConfigurationProviderBuilder
 import org.cfg4j.provider.GenericType
 import org.cfg4j.source.files.FilesConfigurationSource
+import org.json.JSONException
+import org.json.JSONObject
 import org.mapdb.*
 import org.slf4j.LoggerFactory
 import sx.blah.discord.api.ClientBuilder
@@ -26,10 +28,13 @@ import java.net.URL
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
+import java.util.*
 import javax.sound.sampled.AudioSystem
 import javax.sound.sampled.UnsupportedAudioFileException
 import kotlin.concurrent.thread
 import kotlin.system.exitProcess
+
+
 
 fun main(args: Array<String>) {
     val player = DiscordPlayer("player.properties")
@@ -189,7 +194,74 @@ class DiscordPlayer(configFile: Path) {
                 }
             }
 
+            "current" -> {
+                val a = player?.currentTrack?.metadata?.get("file")
+                if (a is File) {
+                    message.respond(a.name)
+                } else {
+                    message.respond("I dunno :(")
+                }
+            }
+
+            "queue_after" -> {
+                val queue = ArrayList<AudioPlayer.Track>()
+                player?.playlist?.forEach {
+                    queue.add(it)
+                }
+                val channel = message.author.connectedVoiceChannels.firstOrNull {
+                    it.guild == message.guild
+                }
+
+                if (channel == null) {
+                    message.respond("You need to join a voice channel to play music")
+                } else {
+                    player?.clear()
+                    if (!channel.isConnected) {
+                        channel.join()
+                    }
+                    words.drop(1).forEach {
+                        player?.queue(File(musicFolder, musicList.findIndex(it.toInt())!!.path))
+                    }
+                    queue.forEach {
+                        player?.queue(it)
+                    }
+                }
+            }
+
+            "queue_clear" -> {
+                player?.clear()
+                client.connectedVoiceChannels.find { it.guild == message.guild }?.leave()
+            }
+
             "queue" -> {
+                if (words.size == 1) {
+                    player?.playlist?.take(5)?.forEach {
+                        val a = it.metadata?.get("file")
+                        if (a is File) {
+                            message.respond(a.name)
+                        } else {
+                            message.respond("I dunno :(")
+                        }
+                    }
+                } else {
+                    val channel = message.author.connectedVoiceChannels.firstOrNull {
+                        it.guild == message.guild
+                    }
+
+                    if (channel == null) {
+                        message.respond("You need to join a voice channel to play music")
+                    } else {
+                        if (!channel.isConnected) {
+                            channel.join()
+                        }
+                        words.drop(1).forEach {
+                            player?.queue(File(musicFolder, musicList.findIndex(it.toInt())!!.path))
+                        }
+                    }
+                }
+            }
+
+            "queue_all" -> {
                 val channel = message.author.connectedVoiceChannels.firstOrNull {
                     it.guild == message.guild
                 }
@@ -200,8 +272,8 @@ class DiscordPlayer(configFile: Path) {
                     if (!channel.isConnected) {
                         channel.join()
                     }
-                    words.drop(1).forEach {
-                        player?.queue(File(musicFolder, musicList.findIndex(it.toInt())!!.path))
+                    musicList.forEach {
+                        player?.queue(File(musicFolder, it.path))
                     }
                 }
             }
@@ -217,65 +289,25 @@ class DiscordPlayer(configFile: Path) {
             }
 
             "load" -> {
+                loadFile(words[1], message)
+            }
+
+            "load_youtube" -> {
                 fun response(progress: Int) = if (progress >= 0)
                     "Loading file: `[${"■".repeat(progress)}${" ".repeat(5 - progress)}]`"
                 else
                     "Loading file: progress unknown"
 
-                val connection = URL(words[1]).openConnection()
+                val connection = URL("http://www.youtubeinmp3.com/fetch/?format=JSON&video=" + words[1]).openConnection()
                 if (connection is HttpURLConnection && connection.responseCode / 100 != 2) {
                     message.respond("Could not open connection: ${connection.responseCode} ${connection.responseMessage}")
                 } else {
-                    val name = connection.getHeaderField("Content-Disposition")
-                                   ?.let { dispositionMatcher.find(it)?.groupValues?.get(1) }
-                               ?: words[1].substringAfterLast('/').substringBefore('?')
-                    val size = connection.getHeaderFieldLong("Content-Length", -1)
-                    if (size > 15 * (1 shl 20)) {
-                        message.respond("File is larger than 15 MB, try different format or reduce bitrate")
-                        return
-                    }
-
-                    val progress = message.respond(response(if (size > 0) 0 else -1))
-
-                    val file = run {
-                        var current = File(musicFolder, name)
-                        val end = if (current.extension.isEmpty()) "" else ".${current.extension}"
-                        var count = 1
-
-                        while (current.exists()) {
-                            current = File(musicFolder, "${current.nameWithoutExtension}(${count++})$end")
-                        }
-
-                        current
-                    }
-
-                    val stream = CountingOutputStream(file.outputStream())
-                    thread(start = true) {
-                        var last = 0
-                        do {
-                            val new = Math.round((stream.count.toDouble() / size.toDouble()) * 5).toInt()
-                            if (new != last) {
-                                last = new
-                                progress.edit(response(new))
-                            }
-                            Thread.sleep(200)
-                        } while (stream.count < size)
-
-                        if (last < 5) {
-                            progress.edit(response(5))
-                        }
-
-                    }
-
-                    connection.inputStream.copyTo(stream)
-                    stream.close()
+                    val content = Utils().readToString(connection.inputStream)
                     try {
-                        AudioSystem.getAudioInputStream(file)
-                        val new = addFile(file)
-                        message.respond("Saved as ($new)")
-                    } catch (e: UnsupportedAudioFileException) {
-                        message.respond("This audio format is not supported\nPlease try one of the following: wav, mp3")
-                        file.delete()
+                        val json = JSONObject(content)
+                        loadFile(json.getString("link"), message)
+                    } catch (e: JSONException) {
+                        message.respond("Can't download this video. :(")
                     }
                 }
             }
@@ -428,6 +460,70 @@ class DiscordPlayer(configFile: Path) {
         open = false
         db.close()
         client.logout()
+    }
+
+    fun response(progress: Int) = if (progress >= 0)
+        "Loading file: `[${"■".repeat(progress)}${" ".repeat(5 - progress)}]`"
+    else
+        "Loading file: progress unknown"
+
+    fun loadFile(link: String, message: IMessage) {
+        val connection = URL(link).openConnection()
+        if (connection is HttpURLConnection && connection.responseCode / 100 != 2) {
+            message.respond("Could not open connection: ${connection.responseCode} ${connection.responseMessage}")
+        } else {
+            val name = connection.getHeaderField("Content-Disposition")
+                    ?.let { dispositionMatcher.find(it)?.groupValues?.get(1) }
+                    ?: link.substringAfterLast('/').substringBefore('?')
+            val size = connection.getHeaderFieldLong("Content-Length", -1)
+            if (size > 15 * (1 shl 20)) {
+                message.respond("File is larger than 15 MB, try different format or reduce bitrate")
+                return
+            }
+
+            val progress = message.respond(response(if (size > 0) 0 else -1))
+
+            val file = run {
+                var current = File(musicFolder, name)
+                val end = if (current.extension.isEmpty()) "" else ".${current.extension}"
+                var count = 1
+
+                while (current.exists()) {
+                    current = File(musicFolder, "${current.nameWithoutExtension}(${count++})$end")
+                }
+
+                current
+            }
+
+            val stream = CountingOutputStream(file.outputStream())
+            thread(start = true) {
+                var last = 0
+                do {
+                    val new = Math.round((stream.count.toDouble() / size.toDouble()) * 5).toInt()
+                    if (new != last) {
+                        last = new
+                        progress.edit(response(new))
+                    }
+                    Thread.sleep(200)
+                } while (stream.count < size)
+
+                if (last < 5) {
+                    progress.edit(response(5))
+                }
+
+            }
+
+            connection.inputStream.copyTo(stream)
+            stream.close()
+            try {
+                AudioSystem.getAudioInputStream(file)
+                val new = addFile(file)
+                message.respond("Saved as ($new)")
+            } catch (e: UnsupportedAudioFileException) {
+                message.respond("This audio format is not supported\nPlease try one of the following: wav, mp3")
+                file.delete()
+            }
+        }
     }
 }
 
