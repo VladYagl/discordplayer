@@ -34,7 +34,8 @@ import javax.sound.sampled.UnsupportedAudioFileException
 import kotlin.concurrent.thread
 import kotlin.system.exitProcess
 
-
+//TODO:get left time.
+//TODO: Exceptions can be thrown to console
 
 fun main(args: Array<String>) {
     val player = DiscordPlayer("player.properties")
@@ -235,6 +236,9 @@ class DiscordPlayer(configFile: Path) {
 
             "queue" -> {
                 if (words.size == 1) {
+                    if (player?.playlist?.size == 0) {
+                        message.respond("Queue is empty")
+                    }
                     player?.playlist?.take(5)?.forEach {
                         val a = it.metadata?.get("file")
                         if (a is File) {
