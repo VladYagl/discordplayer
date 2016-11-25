@@ -1,18 +1,10 @@
 package coffee.cypher.discordplayer
 
 import com.google.common.io.CountingOutputStream
-import org.cfg4j.provider.ConfigurationProvider
 import org.cfg4j.provider.ConfigurationProviderBuilder
-import org.cfg4j.provider.GenericType
 import org.cfg4j.source.files.FilesConfigurationSource
-import org.mapdb.Atomic
-import org.mapdb.DB
-import org.mapdb.DBMaker
 import org.slf4j.LoggerFactory
 import sx.blah.discord.api.ClientBuilder
-import sx.blah.discord.api.events.Event
-import sx.blah.discord.api.events.EventDispatcher
-import sx.blah.discord.api.events.IListener
 import sx.blah.discord.handle.impl.events.MentionEvent
 import sx.blah.discord.handle.impl.events.MessageReceivedEvent
 import sx.blah.discord.handle.impl.events.ReadyEvent
@@ -35,32 +27,6 @@ import kotlin.concurrent.thread
 import kotlin.system.exitProcess
 
 class DiscordPlayer(configFile: Path) {
-    private val dispositionMatcher = "(?i)filename=\"([^\"]+)\"".toRegex()
-
-    private inline fun <reified T : Event> EventDispatcher.on(noinline callback: T.() -> Unit) = registerListener(IListener(callback))
-
-    private inline fun <reified T : Event> EventDispatcher.once(noinline callback: T.() -> Unit) = registerTemporaryListener(IListener(callback))
-
-    private fun IMessage.respond(message: String, mention: Boolean = false): IMessage = channel.sendMessage("${if (mention) author.mention() else ""} $message")
-
-    private fun IMessage.respondList(list: List<String>, prefix: String = "", suffix: String = "", separator: String = "\n", mention: Boolean = false): IMessage {
-        var extra = ""
-        var result = ""
-
-        var count = 0
-        list.forEach {
-            if (result.length + it.length < 1800) {
-                count++
-                result += it + separator
-            } else {
-                extra = "\n And ${list.size - count} more..."
-            }
-        }
-        return respond("$prefix$result$suffix$extra", mention)
-    }
-
-    private inline fun <reified T> ConfigurationProvider.get(name: String): T = getProperty(name, object : GenericType<T>() {})
-
     constructor(configFile: String) : this(Paths.get(configFile))
     constructor(configFile: File) : this(configFile.toPath())
 
@@ -74,13 +40,7 @@ class DiscordPlayer(configFile: Path) {
 
     val client = ClientBuilder().withToken(config.get("token")).build()!!
     var open = false
-
-    lateinit var db: DB
-    lateinit var musicList: MutableSet<MusicFile>
-    lateinit var playlists: MutableSet<Playlist>
-    lateinit var musicFolder: File
-    lateinit var nextIndex: Atomic.Integer
-    lateinit var nextPLIndex: Atomic.Integer
+    val db = MusicDB(config.get<String>("database.file"))
 
     fun start() {
         client.login()
@@ -113,28 +73,11 @@ class DiscordPlayer(configFile: Path) {
             on<TrackSkipEvent>(handler)
         }
 
-        db = DBMaker.fileDB(config.get<String>("database.file")).transactionEnable().closeOnJvmShutdown().make()
-        musicList = db.hashSet("music", MusicFile.Serializer).counterEnable().createOrOpen()
-        playlists = db.hashSet("playlists", Playlist.Serializer).counterEnable().createOrOpen()
-        musicFolder = File(db.atomicString("music.folder", "music").createOrOpen().get())
-        nextIndex = db.atomicInteger("index", 1).createOrOpen()
-        nextPLIndex = db.atomicInteger("plIndex", 1).createOrOpen()
-        populateDB()
+        //TODO: INIT DB
 
         Runtime.getRuntime().addShutdownHook(Thread {
             stop()
         })
-    }
-
-    fun populateDB() {
-        val old = musicList.toSet()
-
-        musicFolder.listFiles()
-                .asSequence()
-                .filter { old.none { f -> f.path == it.relativeTo(musicFolder).path } }
-                .forEach { addFile(it) }
-
-        db.commit()
     }
 
     fun processCommand(commandText: String, message: IMessage) {
@@ -156,7 +99,7 @@ class DiscordPlayer(configFile: Path) {
 
             "resume" -> player?.isPaused = false
 
-            "list" -> message.respond(musicList.sortedBy(MusicFile::index).joinToString("\n").run {
+            "list" -> message.respond(db.musicList.sortedBy(MusicFile::index).joinToString("\n").run {
                 if (isEmpty())
                     "No playlists available"
                 else
@@ -184,10 +127,10 @@ class DiscordPlayer(configFile: Path) {
             }
 
             "remove" -> {
-                musicList.findIndex(words[1].toInt())?.let {
-                    removeFile(it)
-                    playlists.forEach { p -> p.tracks -= it.index }
-                    File(musicFolder, it.path).delete()
+                db.musicList.findIndex(words[1].toInt())?.let {
+                    db.removeFile(it)
+                    db.playlists.forEach { p -> p.tracks -= it.index }
+                    File(db.musicFolder, it.path).delete()
                 }
 
                 db.commit()
@@ -195,7 +138,7 @@ class DiscordPlayer(configFile: Path) {
 
             "find" -> {
                 val key = commandText.substringAfter(words[0]).trim().toLowerCase()
-                val found = musicList.filter { key in it.toString().toLowerCase() }.sortedBy(MusicFile::index)
+                val found = db.musicList.filter { key in it.toString().toLowerCase() }.sortedBy(MusicFile::index)
 
                 if (found.isEmpty()) {
                     message.respond("No matching tracks found")
@@ -232,7 +175,7 @@ class DiscordPlayer(configFile: Path) {
                         channel.join()
                     }
                     words.drop(1).forEach {
-                        player?.queue(File(musicFolder, musicList.findIndex(it.toInt())!!.path))
+                        player?.queue(File(db.musicFolder, db.musicList.findIndex(it.toInt())!!.path))
                     }
                     queue.forEach {
                         player?.queue(it)
@@ -251,15 +194,15 @@ class DiscordPlayer(configFile: Path) {
                         message.respond("Queue is empty")
                     }
 
-                    message.respondList( player?.playlist?.map {
+                    message.respondList(player?.playlist?.map {
                         val a = it.metadata?.get("file") as File
-                        val found = musicList.filter { File(musicFolder, it.path).path == a.path }
+                        val found = db.musicList.filter { File(db.musicFolder, it.path).path == a.path }
                         if (found.size == 1) {
                             found[0].toString()
                         } else {
                             "I dunno :("
                         }
-                    }?: ArrayList<String>())
+                    } ?: ArrayList<String>())
 
                 } else {
                     val channel = message.author.connectedVoiceChannels.firstOrNull {
@@ -275,8 +218,8 @@ class DiscordPlayer(configFile: Path) {
                         }
                         val addedList = ArrayList<String>()
                         words.drop(1).forEach {
-                            val file = musicList.findIndex(it.toInt())
-                            player?.queue(File(musicFolder, file!!.path))
+                            val file = db.musicList.findIndex(it.toInt())
+                            player?.queue(File(db.musicFolder, file!!.path))
                             addedList.add(file.toString())
                         }
                         message.respondList(addedList, prefix = "Added :\n")
@@ -286,10 +229,10 @@ class DiscordPlayer(configFile: Path) {
 
             "file", "move", "rename" -> {
                 val newName = commandText.substringAfter(words[1]).trim()
-                musicList.findIndex(words[1].toInt())?.let {
-                    musicList.remove(it)
-                    Files.move(Paths.get(musicFolder.path, it.path), Paths.get(musicFolder.canonicalPath, newName))
-                    musicList.add(MusicFile(it.index, it.artist, it.name, File(musicFolder, newName).relativeTo(musicFolder).path))
+                db.musicList.findIndex(words[1].toInt())?.let {
+                    db.musicList.remove(it)
+                    Files.move(Paths.get(db.musicFolder.path, it.path), Paths.get(db.musicFolder.canonicalPath, newName))
+                    db.musicList.add(MusicFile(it.index, it.artist, it.name, File(db.musicFolder, newName).relativeTo(db.musicFolder).path))
                 }
                 db.commit()
             }
@@ -305,9 +248,9 @@ class DiscordPlayer(configFile: Path) {
             "leave_channel" -> client.connectedVoiceChannels.find { it.guild == message.guild }?.leave()
 
             "artist" -> {
-                musicList.findIndex(words[1].toInt())?.let {
-                    musicList.remove(it)
-                    musicList.add(MusicFile(it.index, commandText.substringAfter(words[1]).trim(), it.name, it.path))
+                db.musicList.findIndex(words[1].toInt())?.let {
+                    db.musicList.remove(it)
+                    db.musicList.add(MusicFile(it.index, commandText.substringAfter(words[1]).trim(), it.name, it.path))
                 }
                 db.commit()
             }
@@ -325,41 +268,41 @@ class DiscordPlayer(configFile: Path) {
             }
 
             "name" -> {
-                musicList.findIndex(words[1].toInt())?.let {
-                    musicList.remove(it)
-                    musicList.add(MusicFile(it.index, it.artist, commandText.substringAfter(words[1]).trim(), it.path))
+                db.musicList.findIndex(words[1].toInt())?.let {
+                    db.musicList.remove(it)
+                    db.musicList.add(MusicFile(it.index, it.artist, commandText.substringAfter(words[1]).trim(), it.path))
                 }
                 db.commit()
             }
 
             "create_playlist" -> {
                 val name = commandText.substringAfter(words[0]).trim()
-                val lists = playlists.toList()
+                val lists = db.playlists.toList()
 
                 if (lists.any { it.name == name }) {
                     message.respond("Playlist with that name already exists")
                 } else {
-                    val new = Playlist(nextPLIndex.get(), name)
-                    playlists.add(new)
+                    val new = Playlist(db.nextPLIndex.get(), name)
+                    db.playlists.add(new)
                     message.respond("Playlist created: $new")
 
-                    if (lists.size == nextPLIndex.get()) {
-                        nextPLIndex.andIncrement
+                    if (lists.size == db.nextPLIndex.get()) {
+                        db.nextPLIndex.andIncrement
                     } else {
-                        var next = nextPLIndex.get() + 1
+                        var next = db.nextPLIndex.get() + 1
                         val set = lists.associateBy { it.index }
                         while (set[next] != null) {
                             next++
                         }
 
-                        nextPLIndex.set(next)
+                        db.nextPLIndex.set(next)
                     }
                 }
 
                 db.commit()
             }
 
-            "playlists" -> message.respond(playlists.sortedBy(Playlist::index).joinToString("\n").run {
+            "playlists" -> message.respond(db.playlists.sortedBy(Playlist::index).joinToString("\n").run {
                 db.commit()
                 if (isEmpty())
                     "No playlists available"
@@ -368,18 +311,18 @@ class DiscordPlayer(configFile: Path) {
             })
 
             "playlist_add" -> {
-                val list = playlists.findIndex(words[1].toInt()) ?: return
+                val list = db.playlists.findIndex(words[1].toInt()) ?: return
                 list.tracks += words.drop(2).map(String::toInt)
-                playlists.remove(list)
-                playlists.add(list)
+                db.playlists.remove(list)
+                db.playlists.add(list)
                 db.commit()
             }
 
             "playlist_remove" -> {
-                val list = playlists.findIndex(words[1].toInt()) ?: return
+                val list = db.playlists.findIndex(words[1].toInt()) ?: return
                 list.tracks -= words.drop(2).map(String::toInt)
-                playlists.remove(list)
-                playlists.add(list)
+                db.playlists.remove(list)
+                db.playlists.add(list)
                 db.commit()
             }
 
@@ -395,8 +338,8 @@ class DiscordPlayer(configFile: Path) {
                         channel.join()
                         player?.let { it.volume = 0.1F }
                     }
-                    playlists.findIndex(words[1].toInt())?.tracks?.forEach {
-                        player?.queue(File(musicFolder, musicList.findIndex(it)!!.path))
+                    db.playlists.findIndex(words[1].toInt())?.tracks?.forEach {
+                        player?.queue(File(db.musicFolder, db.musicList.findIndex(it)!!.path))
                     }
                 }
             }
@@ -417,48 +360,18 @@ class DiscordPlayer(configFile: Path) {
 
     fun Collection<Playlist>.findIndex(index: Int) = find { it.index == index }
 
-    fun addFile(file: File): MusicFile {
-        val added = MusicFile(nextIndex.get(), null, null, file.relativeTo(musicFolder).path)
-        musicList.add(added)
-        if (musicList.size == nextIndex.get()) {
-            nextIndex.andIncrement
-        } else {
-            var next = nextIndex.get() + 1
-            val set = musicList.toSet().associateBy { it.index }
-            while (set[next] != null) {
-                next++
-            }
-
-            nextIndex.set(next)
-        }
-
-        db.commit()
-
-        return added
-    }
-
-    fun removeFile(file: MusicFile) {
-        val list = musicList.toList()
-
-        if (file in list) {
-            musicList.remove(file)
-            nextIndex.set(Math.min(file.index, nextIndex.get()))
-        }
-        db.commit()
-    }
-
     fun stop() {
         open = false
         db.close()
         client.logout()
     }
 
-    fun response(progress: Int) = if (progress >= 0)
-        "Loading file: `[${"■".repeat(progress)}${" ".repeat(5 - progress)}]`"
-    else
-        "Loading file: progress unknown"
-
     fun loadFile(link: String, message: IMessage) {
+        fun response(progress: Int) = if (progress >= 0)
+            "Loading file: `[${"■".repeat(progress)}${" ".repeat(5 - progress)}]`"
+        else
+            "Loading file: progress unknown"
+
         val connection = URL(link).openConnection()
         if (connection is HttpURLConnection && connection.responseCode / 100 != 2) {
             message.respond("Could not open connection: ${connection.responseCode} ${connection.responseMessage}")
@@ -480,12 +393,12 @@ class DiscordPlayer(configFile: Path) {
             val progress = message.respond(response(if (size > 0) 0 else -1))
 
             val file = run {
-                var current = File(musicFolder, name)
+                var current = File(db.musicFolder, name)
                 val end = if (current.extension.isEmpty()) "" else ".${current.extension}"
                 var count = 1
 
                 while (current.exists()) {
-                    current = File(musicFolder, "${current.nameWithoutExtension}(${count++})$end")
+                    current = File(db.musicFolder, "${current.nameWithoutExtension}(${count++})$end")
                 }
 
                 current
@@ -513,7 +426,7 @@ class DiscordPlayer(configFile: Path) {
             stream.close()
             try {
                 AudioSystem.getAudioInputStream(file)
-                val new = addFile(file)
+                val new = db.addFile(file)
                 message.respond("Saved as ($new)")
             } catch (e: UnsupportedAudioFileException) {
                 message.respond("This audio format is not supported\nPlease try one of the following: wav, mp3")

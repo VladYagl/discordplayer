@@ -5,9 +5,10 @@ import org.mapdb.DataOutput2
 
 data class MusicFile(val index: Int, val artist: String?, val name: String?, val path: String) {
     override fun toString(): String {
-        var fileName = path.replace("[^\\p{Print}]+".toRegex(), "#")
-        fileName = fileName.replace(".mp3$".toRegex(), "")
-        fileName = fileName.replace("\\[SaveFrom\\.online\\]".toRegex(), "")
+        val fileName = path
+                .replace("[^\\p{Print}]+".toRegex(), "#")
+                .replace(".mp3$".toRegex(), "")
+                .replace("\\[SaveFrom\\.online\\]".toRegex(), "")
         return "$index: ${if (artist == null && name == null) fileName else "${artist ?: ""} ${name ?: ""} ($fileName)"}"
     }
 
