@@ -43,6 +43,22 @@ class DiscordPlayer(configFile: Path) {
 
     private fun IMessage.respond(message: String, mention: Boolean = false): IMessage = channel.sendMessage("${if (mention) author.mention() else ""} $message")
 
+    private fun IMessage.respondList(list: List<String>, prefix: String = "", suffix: String = "", separator: String = "\n", mention: Boolean = false): IMessage {
+        var extra = ""
+        var result = ""
+
+        var count = 0
+        list.forEach {
+            if (result.length + it.length < 1800) {
+                count++
+                result += it + separator
+            } else {
+                extra = "\n And ${list.size - count} more..."
+            }
+        }
+        return respond("$prefix$result$suffix$extra", mention)
+    }
+
     private inline fun <reified T> ConfigurationProvider.get(name: String): T = getProperty(name, object : GenericType<T>() {})
 
     constructor(configFile: String) : this(Paths.get(configFile))
@@ -179,25 +195,14 @@ class DiscordPlayer(configFile: Path) {
 
             "find" -> {
                 val key = commandText.substringAfter(words[0]).trim().toLowerCase()
-                /*if (key.isBlank()) {
-                    message.respond("No search query provided")
-                    return
-                }*/
-                val found = musicList.filter { key in it.toString().toLowerCase() }
+                val found = musicList.filter { key in it.toString().toLowerCase() }.sortedBy(MusicFile::index)
 
                 if (found.isEmpty()) {
                     message.respond("No matching tracks found")
                 } else {
-                    var extra = ""
-                    var result = ""
-                    found.forEach {
-                        if (it.toString().length + result.length < 1800) {
-                            result += it.toString() + "\n"
-                        } else {
-                            extra = "\n Found so much. Can't show them all..."
-                        }
-                    }
-                    message.respond("${found.size} match${if (found.size > 1) "es" else ""} found:\n```\n$result```$extra")
+                    message.respondList(found.sortedBy(MusicFile::index).map { it.toString() },
+                            prefix = "${found.size} match${if (found.size > 1) "es" else ""} found:\n```\n",
+                            suffix = "```")
                 }
             }
 
@@ -245,19 +250,17 @@ class DiscordPlayer(configFile: Path) {
                     if (player?.playlist?.size == 0) {
                         message.respond("Queue is empty")
                     }
-                    player?.playlist?.take(5)?.forEach {
-                        val a = it.metadata?.get("file")
-                        if (a is File) {
-                            val found = musicList.filter { File(musicFolder, it.path).path == a.path }
-                            if (found.size == 1) {
-                                message.respond(found[0].toString())
-                            } else {
-                                message.respond("I dunno :(")
-                            }
+
+                    message.respondList( player?.playlist?.map {
+                        val a = it.metadata?.get("file") as File
+                        val found = musicList.filter { File(musicFolder, it.path).path == a.path }
+                        if (found.size == 1) {
+                            found[0].toString()
                         } else {
-                            message.respond("I dunno :(")
+                            "I dunno :("
                         }
-                    }
+                    }?: ArrayList<String>())
+
                 } else {
                     val channel = message.author.connectedVoiceChannels.firstOrNull {
                         it.guild == message.guild
@@ -276,24 +279,7 @@ class DiscordPlayer(configFile: Path) {
                             player?.queue(File(musicFolder, file!!.path))
                             addedList.add(file.toString())
                         }
-                        message.respond(addedList.joinToString(prefix = "Added :\n", postfix = "", separator = "\n"))
-                    }
-                }
-            }
-
-            "queue_all" -> {
-                val channel = message.author.connectedVoiceChannels.firstOrNull {
-                    it.guild == message.guild
-                }
-
-                if (channel == null) {
-                    message.respond("You need to join a voice channel to play music")
-                } else {
-                    if (!channel.isConnected) {
-                        channel.join()
-                    }
-                    musicList.forEach {
-                        player?.queue(File(musicFolder, it.path))
+                        message.respondList(addedList, prefix = "Added :\n")
                     }
                 }
             }
@@ -477,7 +463,7 @@ class DiscordPlayer(configFile: Path) {
         if (connection is HttpURLConnection && connection.responseCode / 100 != 2) {
             message.respond("Could not open connection: ${connection.responseCode} ${connection.responseMessage}")
         } else {
-            //DEBUG: message.respond(connection.headerFields.toString())
+            //DEBUG: message.respondList(connection.headerFields.toString())
             if (!connection.getHeaderField("Content-Type").contains("audio")) {
                 message.respond("Something went wrong.:BrokeBack:")
                 return
