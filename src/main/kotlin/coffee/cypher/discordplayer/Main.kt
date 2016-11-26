@@ -11,8 +11,8 @@ import sx.blah.discord.handle.obj.IMessage
 //TODO: Exceptions can be thrown to console
 
 fun main(args: Array<String>) {
-    val player = DiscordPlayer("player.properties")
-    player.start()
+    val client = DiscordClient("player.properties")
+    client.start()
 }
 
 val dispositionMatcher = "(?i)filename=\"([^\"]+)\"".toRegex()
@@ -21,22 +21,6 @@ inline fun <reified T : Event> EventDispatcher.on(noinline callback: T.() -> Uni
 
 inline fun <reified T : Event> EventDispatcher.once(noinline callback: T.() -> Unit) = registerTemporaryListener(IListener(callback))
 
-fun IMessage.respond(message: String, mention: Boolean = false): IMessage = channel.sendMessage("${if (mention) author.mention() else ""} $message")
-
-fun IMessage.respondList(list: List<String>, prefix: String = "", suffix: String = "", separator: String = "\n", mention: Boolean = false): IMessage {
-    var extra = ""
-    var result = ""
-
-    var count = 0
-    list.forEach {
-        if (result.length + it.length < 1800) {
-            count++
-            result += it + separator
-        } else {
-            extra = "\n And ${list.size - count} more..."
-        }
-    }
-    return respond("$prefix$result$suffix$extra", mention)
-}
-
 inline fun <reified T> ConfigurationProvider.get(name: String): T = getProperty(name, object : GenericType<T>() {})
+
+fun IMessage.respond(message: String, mention: Boolean = false): IMessage = channel.sendMessage("${if (mention) author.mention() else ""} $message")
