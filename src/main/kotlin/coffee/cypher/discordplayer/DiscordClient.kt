@@ -19,6 +19,12 @@ import java.nio.file.Path
 import java.nio.file.Paths
 import kotlin.system.exitProcess
 
+//TODO: answers for naming
+//TODO: change numbers
+//TODO: Encoding
+//TODO: Documentation
+//TODO: get current time
+
 class DiscordClient(val configFile: Path) {
     constructor(configFile: String) : this(Paths.get(configFile))
     constructor(configFile: File) : this(configFile.toPath())
@@ -72,7 +78,7 @@ class DiscordClient(val configFile: Path) {
         })
     }
 
-    fun IMessage.joinChannel(ifJoined: () -> Unit) {
+    fun IMessage.joinChannel(player: AudioPlayer?, ifJoined: () -> Unit) {
         val channel = author.connectedVoiceChannels.firstOrNull {
             it.guild == guild
         }
@@ -82,6 +88,7 @@ class DiscordClient(val configFile: Path) {
             if (!channel.isConnected) {
                 channel.join()
             }
+            player?.volume = 0.1F
             ifJoined()
         }
     }
@@ -123,13 +130,13 @@ class DiscordClient(val configFile: Path) {
                     else -> discordPlayer.volume = words[1].toFloat()
                 }
 
-            "remove" -> discordPlayer.remove(words[1].toInt())
+            "remove" -> discordPlayer.remove(commandText.substringAfter(words[0]))
 
             "find" -> discordPlayer.find(commandText.substringAfter(words[0]))
 
             "current" -> discordPlayer.printCurrentSong()
 
-            "queue_now" -> message.joinChannel { discordPlayer.queueNow(words.drop(1).map(String::toInt)) }
+            "queue_now" -> message.joinChannel(player) { discordPlayer.queueNow(commandText.substringAfter(words[0])) }
 
             "queue_clear" -> {
                 discordPlayer.queueClear()
@@ -140,20 +147,20 @@ class DiscordClient(val configFile: Path) {
                 if (words.size == 1)
                     discordPlayer.printQueue()
                 else
-                    message.joinChannel { discordPlayer.queue(words.drop(1).map(String::toInt)) }
+                    message.joinChannel(player) { discordPlayer.queue(commandText.substringAfter(words[0])) }
 
-            "file", "move", "rename" -> discordPlayer.renameFile(words[1].toInt(), commandText.substringAfter(words[1]).trim())
+            "file", "move", "rename" -> discordPlayer.renameFile(words[1], commandText.substringAfter(words[1]).trim())
 
-            "artist" -> discordPlayer.renameArtist(words[1].toInt(), commandText.substringAfter(words[1]).trim())
+            "artist" -> discordPlayer.renameArtist(words[1], commandText.substringAfter(words[1]).trim())
 
-            "name" -> discordPlayer.renameSong(words[1].toInt(), commandText.substringAfter(words[1]).trim())
+            "name" -> discordPlayer.renameSong(words[1], commandText.substringAfter(words[1]).trim())
 
             "load" -> discordPlayer.loadFile(words[1], message)
 
             "load_youtube", "youtube" -> try {
-                discordPlayer.loadFile("http://www.youtubeinmp3.com/fetch/?video=" + words[1], message)
+                discordPlayer.loadFile("http://www.youtubeinmp3.com/fetch/?video=" + words[1].trim(), message)
             } catch (e: IOException) {
-                message.respond("Try this link: " + "http://www.youtubeinmp3.com/fetch/?video=" + words[1])
+                message.respond("Try this link: " + "http://www.youtubeinmp3.com/fetch/?video=" + words[1].trim())
             }
 
             "shuffle" -> player?.shuffle()
@@ -170,11 +177,11 @@ class DiscordClient(val configFile: Path) {
 
             "playlists" -> discordPlayer.printPlaylists()
 
-            "playlist_add" -> discordPlayer.addToPlayList(words[1].toInt(), words.drop(2).map(String::toInt))
+            "playlist_add" -> discordPlayer.addToPlayList(words[1].toInt(), commandText.substringAfter(words[1]))
 
-            "playlist_remove" -> discordPlayer.removeFromPlayList(words[1].toInt(), words.drop(2).map(String::toInt))
+            "playlist_remove" -> discordPlayer.removeFromPlayList(words[1].toInt(), commandText.substringAfter(words[1]))
 
-            "queue_playlist" -> message.joinChannel { discordPlayer.queuePlaylist(words[1].toInt()) }
+            "queue_playlist" -> message.joinChannel(player) { discordPlayer.queuePlaylist(words[1].toInt()) }
 
             "after_this" -> client.dispatcher.once<TrackFinishEvent> {
                 processCommand(commandText.substringAfter(words[0]).trim(), message)

@@ -3,7 +3,7 @@ package coffee.cypher.discordplayer
 import org.mapdb.DataInput2
 import org.mapdb.DataOutput2
 
-data class MusicFile(val index: Int, val artist: String?, val name: String?, val path: String) {
+data class MusicFile(override val index: Int, val artist: String?, val name: String?, val path: String) : Indexed {
     override fun toString(): String {
         val fileName = path
                 .replace("[^\\p{Print}]+".toRegex(), "#")

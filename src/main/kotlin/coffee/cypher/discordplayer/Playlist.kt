@@ -3,7 +3,7 @@ package coffee.cypher.discordplayer
 import org.mapdb.DataInput2
 import org.mapdb.DataOutput2
 
-data class Playlist(val index: Int, val name: String) {
+data class Playlist(override val index: Int, val name: String) : Indexed {
     val tracks: MutableSet<Int> = mutableSetOf()
 
     override fun toString(): String {

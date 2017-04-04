@@ -19,6 +19,52 @@ import kotlin.concurrent.thread
 
 class DiscordPlayer(configFile: Path) {
 
+    fun respondList(list: List<Any>, prefix: String = "", suffix: String = "", separator: String = "\n") {
+        var extra = ""
+        var result = ""
+
+        var count = 0
+        list.forEach {
+            val string = it.toString()
+            if (result.length + string.length < 1800) {
+                count++
+                result += string + separator
+            } else {
+                extra = "\n And ${list.size - count} more..."
+            }
+        }
+        respond("$prefix$result$suffix$extra")
+    }
+
+    fun <T : Indexed> Collection<T>.findIndex(index: Int) = find { it.index == index }
+
+    fun <T> Collection<T>.findIfContains(pattern: String): List<T> {
+        return filter { pattern.isNotEmpty() && pattern.trim().toLowerCase() in it.toString().toLowerCase() }
+    }
+
+    fun <T : Indexed> Collection<T>.filterPatterns(patterns: String): List<T> {
+        val result = ArrayList<T>()
+
+        val quoteSplit = patterns.trim().split("\"")
+        quoteSplit.filterIndexed { index, s -> index % 2 == 1 }.forEach { result += findIfContains(it) }
+
+        val split = ArrayList<String>()
+        quoteSplit.filterIndexed { index, s -> index % 2 == 0 }.forEach { split += it.split(" ") }
+        split.forEach {
+            if (it.matches("\\d+(-\\d+)?".toRegex())) {
+                var temp = it.split("-")
+                if (temp.size == 1) {
+                    temp += temp[0]
+                }
+                temp[0].toInt().rangeTo(temp[1].toInt()).mapNotNullTo(result) { findIndex(it) }
+            } else {
+                result += findIfContains(it)
+            }
+        }
+
+        return result
+    }
+
     val config = ConfigurationProviderBuilder()
             .withConfigurationSource(FilesConfigurationSource { listOf(configFile.toAbsolutePath()) })
             .build()!!
@@ -32,26 +78,6 @@ class DiscordPlayer(configFile: Path) {
         set(volume) {
             player?.volume = volume
         }
-
-    fun respondList(list: List<String>, prefix: String = "", suffix: String = "", separator: String = "\n") {
-        var extra = ""
-        var result = ""
-
-        var count = 0
-        list.forEach {
-            if (result.length + it.length < 1800) {
-                count++
-                result += it + separator
-            } else {
-                extra = "\n And ${list.size - count} more..."
-            }
-        }
-        respond("$prefix$result$suffix$extra")
-    }
-
-    fun Collection<MusicFile>.findIndex(index: Int) = find { it.index == index }
-
-    fun Collection<Playlist>.findIndex(index: Int) = find { it.index == index }
 
     fun close() {
         db.close()
@@ -69,7 +95,7 @@ class DiscordPlayer(configFile: Path) {
         } else {
             //DEBUG: message.respondList(connection.headerFields.toString())
             if (!connection.getHeaderField("Content-Type").contains("audio")) {
-                message.respond("Something went wrong.:BrokeBack:")
+                message.respond("Something went wrong. :BrokeBack:")
                 throw IOException()
             }
             val name = connection.getHeaderField("Content-Disposition")
@@ -140,9 +166,9 @@ class DiscordPlayer(configFile: Path) {
         player?.currentTrack?.rewindTo(0)
     }
 
-    fun remove(index: Int) {
+    fun remove(text: String) {
         var name: String = ""
-        db.musicList.findIndex(index)?.let {
+        db.musicList.filterPatterns(text).forEach {
             name = it.toString()
             db.removeFile(it)
             db.playlists.forEach { p -> p.tracks -= it.index }
@@ -153,14 +179,13 @@ class DiscordPlayer(configFile: Path) {
         respond("Removed song: " + name)
     }
 
-    fun find(text: String) {
-        val key = text.trim().toLowerCase()
-        val found = db.musicList.filter { key in it.toString().toLowerCase() }.sortedBy(MusicFile::index)
+    fun find(patterns: String) {
+        val found = db.musicList.filterPatterns(patterns).sortedBy(MusicFile::index)
 
         if (found.isEmpty()) {
             respond("No matching tracks found")
         } else {
-            respondList(found.sortedBy(MusicFile::index).map { it.toString() },
+            respondList(found.sortedBy(MusicFile::index),
                     prefix = "${found.size} match${if (found.size > 1) "es" else ""} found:\n```\n",
                     suffix = "```")
         }
@@ -171,13 +196,13 @@ class DiscordPlayer(configFile: Path) {
         if (a is File) {
             respond(a.name)
         } else {
-            respond("I dunno :(")
+            respond("I dunno :WutFace: ")
         }
     }
 
     fun printQueue() {
         if (player?.playlist?.size == 0) {
-            respond("Queue is empty")
+            respond("Queue is empty :Kappa: ")
         }
 
         respondList(player?.playlist?.map {
@@ -186,65 +211,67 @@ class DiscordPlayer(configFile: Path) {
             if (found.size == 1) {
                 found[0].toString()
             } else {
-                "I dunno :("
+                "I dunno :WutFace:"
             }
         } ?: ArrayList<String>())
     }
 
-    fun queue(indexes: List<Int>) {
-        val addedList = ArrayList<String>()
-        indexes.forEach {
-            val file = db.musicList.findIndex(it.toInt())
-            player?.queue(File(db.musicFolder, file!!.path))
-            addedList.add(file.toString())
+    fun queue(patterns: String) {
+        val addedList = ArrayList<MusicFile>()
+        db.musicList.filterPatterns(patterns).forEach {
+            player?.queue(File(db.musicFolder, it.path))
+            addedList.add(it)
         }
-        respondList(addedList, prefix = "Added :\n")
+        respondList(addedList.sortedBy(MusicFile::index), prefix = "Added :\n")
     }
 
-    fun queueNow(indexes: List<Int>) {
+    fun queueNow(patterns: String) {
         val queue = ArrayList<AudioPlayer.Track>()
+        val addedList = ArrayList<MusicFile>()
         player?.playlist?.forEach {
             queue.add(it)
         }
         player?.clear()
-        indexes.forEach {
-            player?.queue(File(db.musicFolder, db.musicList.findIndex(it.toInt())!!.path))
+        db.musicList.filterPatterns(patterns).forEach {
+            player?.queue(File(db.musicFolder, it.path))
+            addedList.add(it)
         }
         queue.forEach {
             player?.queue(it)
         }
+        respondList(addedList.sortedBy(MusicFile::index), prefix = "Added :\n")
     }
 
     fun queueClear() {
         player?.clear()
     }
 
-    fun renameFile(index: Int, newName: String) {
-        db.musicList.findIndex(index)?.let {
+    fun renameFile(newName: String, patterns: String) {
+        db.musicList.filterPatterns(patterns).forEach {
             db.musicList.remove(it)
             Files.move(Paths.get(db.musicFolder.path, it.path), Paths.get(db.musicFolder.canonicalPath, newName))
             db.musicList.add(MusicFile(it.index, it.artist, it.name, File(db.musicFolder, newName).relativeTo(db.musicFolder).path))
         }
         db.commit()
-        respond("New name: " + db.musicList.findIndex(index).toString())
+        respondList(db.musicList.filterPatterns(patterns), prefix = "New fileName: $newName")
     }
 
-    fun renameArtist(index: Int, newName: String) {
-        db.musicList.findIndex(index)?.let {
+    fun renameArtist(newName: String, patterns: String) {
+        db.musicList.filterPatterns(patterns).forEach {
             db.musicList.remove(it)
             db.musicList.add(MusicFile(it.index, newName, it.name, it.path))
         }
         db.commit()
-        respond("New name: " + db.musicList.findIndex(index).toString())
+        respondList(db.musicList.filterPatterns(patterns), prefix = "New artist: $newName")
     }
 
-    fun renameSong(index: Int, newName: String) {
-        db.musicList.findIndex(index)?.let {
+    fun renameSong(newName: String, patterns: String) {
+        db.musicList.filterPatterns(patterns).forEach {
             db.musicList.remove(it)
             db.musicList.add(MusicFile(it.index, it.artist, newName, it.path))
         }
         db.commit()
-        respond("New name: " + db.musicList.findIndex(index).toString())
+        respondList(db.musicList.filterPatterns(patterns), prefix = "New sonName: $newName")
     }
 
     fun newPlaylist(name: String) {
@@ -281,27 +308,30 @@ class DiscordPlayer(configFile: Path) {
         })
     }
 
-    fun addToPlayList(plIndex:Int, indexes: List<Int>) {
+    fun addToPlayList(plIndex: Int, patterns: String) {
         val list = db.playlists.findIndex(plIndex) ?: return
+        val indexes = db.musicList.filterPatterns(patterns).map(MusicFile::index)
         list.tracks += indexes
         db.playlists.remove(list)
         db.playlists.add(list)
         db.commit()
-        respondList(indexes.map{ db.musicList.findIndex(it).toString() }, prefix = "Added to playlist '" + db.playlists.findIndex(plIndex).toString() + "':\n")
+        respondList(indexes.map { db.musicList.findIndex(it).toString() }, prefix = "Added to playlist '" + db.playlists.findIndex(plIndex).toString() + "':\n")
     }
 
-    fun removeFromPlayList(plIndex: Int, indexes: List<Int>) {
+    fun removeFromPlayList(plIndex: Int, patterns: String) {
         val list = db.playlists.findIndex(plIndex) ?: return
+        val indexes = db.musicList.filterPatterns(patterns).map(MusicFile::index)
         list.tracks -= indexes
         db.playlists.remove(list)
         db.playlists.add(list)
         db.commit()
-        respondList(indexes.map{ db.musicList.findIndex(it).toString() }, prefix = "Removed from playlist '" + db.playlists.findIndex(plIndex).toString() + "':\n")
+        respondList(indexes.map { db.musicList.findIndex(it).toString() }, prefix = "Removed from playlist '" + db.playlists.findIndex(plIndex).toString() + "':\n")
     }
 
     fun queuePlaylist(plIndex: Int) {
         db.playlists.findIndex(plIndex)?.tracks?.forEach {
             player?.queue(File(db.musicFolder, db.musicList.findIndex(it)!!.path))
         }
+        respond("Added playlist: " + db.playlists.findIndex(plIndex).toString())
     }
 }
